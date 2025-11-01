@@ -2270,6 +2270,110 @@ mod tests {
         // 2. We must have exactly 2 Outsiders (Baron's modifier: -2T/+2O)
         assert_eq!(outsider_count, 2, "Baron adds exactly 2 Outsiders, so we need 2 total");
     }
+
+    // ===== GRIMOIRE PARSER TESTS =====
+
+    #[test]
+    fn test_parse_grimoire_basic() {
+        let grimoire_str = "[Alice:baron Bob:imp Charlie:butler]";
+        let grimoire = parse_grimoire(grimoire_str).unwrap();
+
+        assert_eq!(grimoire.players.len(), 3);
+
+        assert_eq!(grimoire.players[0].name, "Alice");
+        assert_eq!(grimoire.players[0].role, "baron");
+        assert!(grimoire.players[0].alive);
+        assert!(grimoire.players[0].has_ghost_vote);
+        assert!(grimoire.players[0].reminder_tokens.is_empty());
+
+        assert_eq!(grimoire.players[1].name, "Bob");
+        assert_eq!(grimoire.players[1].role, "imp");
+
+        assert_eq!(grimoire.players[2].name, "Charlie");
+        assert_eq!(grimoire.players[2].role, "butler");
+    }
+
+    #[test]
+    fn test_parse_grimoire_with_tokens() {
+        let grimoire_str = "[Alice:baron(poi:poisoned,ww:townsfolk) Bob:imp]";
+        let grimoire = parse_grimoire(grimoire_str).unwrap();
+
+        assert_eq!(grimoire.players.len(), 2);
+        assert_eq!(grimoire.players[0].name, "Alice");
+        assert_eq!(grimoire.players[0].reminder_tokens.len(), 2);
+        assert_eq!(grimoire.players[0].reminder_tokens[0], "poi:poisoned");
+        assert_eq!(grimoire.players[0].reminder_tokens[1], "ww:townsfolk");
+    }
+
+    #[test]
+    fn test_parse_grimoire_dead_with_ghost_vote() {
+        let grimoire_str = "[Alice:baron *Bob:imp*]";
+        let grimoire = parse_grimoire(grimoire_str).unwrap();
+
+        assert_eq!(grimoire.players.len(), 2);
+        assert!(grimoire.players[0].alive);
+        assert!(!grimoire.players[1].alive);
+        assert!(grimoire.players[1].has_ghost_vote);
+        assert_eq!(grimoire.players[1].name, "Bob");
+        assert_eq!(grimoire.players[1].role, "imp");
+    }
+
+    #[test]
+    fn test_parse_grimoire_dead_without_ghost_vote() {
+        let grimoire_str = "[Alice:baron *~~Bob~~:imp*]";
+        let grimoire = parse_grimoire(grimoire_str).unwrap();
+
+        assert_eq!(grimoire.players.len(), 2);
+        assert!(!grimoire.players[1].alive);
+        assert!(!grimoire.players[1].has_ghost_vote);
+        assert_eq!(grimoire.players[1].name, "Bob");
+        assert_eq!(grimoire.players[1].role, "imp");
+    }
+
+    #[test]
+    fn test_parse_grimoire_mixed_states() {
+        let grimoire_str = "[Alice:baron(poi:poisoned) *Bob:imp* *~~Charlie~~:butler* Dave:washerwoman]";
+        let grimoire = parse_grimoire(grimoire_str).unwrap();
+
+        assert_eq!(grimoire.players.len(), 4);
+
+        // Alice: alive with tokens
+        assert!(grimoire.players[0].alive);
+        assert_eq!(grimoire.players[0].reminder_tokens.len(), 1);
+
+        // Bob: dead with ghost vote
+        assert!(!grimoire.players[1].alive);
+        assert!(grimoire.players[1].has_ghost_vote);
+
+        // Charlie: dead without ghost vote
+        assert!(!grimoire.players[2].alive);
+        assert!(!grimoire.players[2].has_ghost_vote);
+
+        // Dave: alive
+        assert!(grimoire.players[3].alive);
+        assert!(grimoire.players[3].has_ghost_vote);
+    }
+
+    #[test]
+    fn test_parse_grimoire_empty() {
+        let grimoire_str = "[]";
+        let grimoire = parse_grimoire(grimoire_str).unwrap();
+        assert_eq!(grimoire.players.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_grimoire_with_commas() {
+        let grimoire_str = "[Alice:baron, Bob:imp, Charlie:butler]";
+        let grimoire = parse_grimoire(grimoire_str).unwrap();
+        assert_eq!(grimoire.players.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_grimoire_invalid_format() {
+        let result = parse_grimoire("Alice:baron Bob:imp");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("square brackets"));
+    }
 }
 
 // RoleSpec: Either a known role or a placeholder to be solved for
@@ -2465,6 +2569,164 @@ fn match_role_name_filtered(name: &str, script: Option<&Script>) -> Result<Role,
     } else {
         Err(format!("Unknown role name: '{}'", name))
     }
+}
+
+// ===== GRIMOIRE RENDERING =====
+
+/// Represents a player's state in the grimoire
+#[derive(Debug, Clone, PartialEq)]
+struct PlayerState {
+    name: String,
+    role: String,
+    alive: bool,
+    has_ghost_vote: bool,
+    reminder_tokens: Vec<String>,
+}
+
+/// Represents the complete grimoire state
+#[derive(Debug, Clone, PartialEq)]
+struct GrimoireState {
+    players: Vec<PlayerState>,
+}
+
+/// Parse grimoire from single-line format: [Alice:baron Bob:imp *Charlie:butler*]
+fn parse_grimoire(input: &str) -> Result<GrimoireState, String> {
+    let trimmed = input.trim();
+
+    // Check for square brackets
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return Err(format!("Grimoire must be enclosed in square brackets: {}", input));
+    }
+
+    // Extract content between brackets
+    let content = &trimmed[1..trimmed.len() - 1].trim();
+
+    if content.is_empty() {
+        return Ok(GrimoireState { players: Vec::new() });
+    }
+
+    // Split by whitespace and commas, but NOT inside parentheses
+    let tokens = split_player_entries(content);
+
+    let mut players = Vec::new();
+
+    for token in tokens {
+        players.push(parse_player_entry(token)?);
+    }
+
+    Ok(GrimoireState { players })
+}
+
+/// Split player entries, respecting parentheses (don't split on commas inside parens)
+fn split_player_entries(content: &str) -> Vec<&str> {
+    let mut entries = Vec::new();
+    let mut current_start = 0;
+    let mut paren_depth = 0;
+    let chars: Vec<char> = content.chars().collect();
+
+    for (i, &ch) in chars.iter().enumerate() {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => paren_depth -= 1,
+            _ if paren_depth == 0 && (ch.is_whitespace() || ch == ',') => {
+                // Split here
+                let entry = &content[current_start..i].trim();
+                if !entry.is_empty() {
+                    entries.push(*entry);
+                }
+                current_start = i + 1;
+            }
+            _ => {}
+        }
+    }
+
+    // Add the last entry
+    let entry = &content[current_start..].trim();
+    if !entry.is_empty() {
+        entries.push(*entry);
+    }
+
+    entries
+}
+
+/// Parse a single player entry: Alice:baron or *Bob:imp* or *~~Charlie~~:butler(poi:poisoned)*
+fn parse_player_entry(entry: &str) -> Result<PlayerState, String> {
+    let entry = entry.trim();
+
+    // Check if dead (surrounded by *)
+    if entry.starts_with('*') && entry.ends_with('*') {
+        // Dead player
+        let inner = &entry[1..entry.len() - 1];
+
+        // Check if ghost vote used (~~name~~)
+        let (name_part, has_ghost_vote) = if inner.starts_with("~~") && inner.contains("~~:") {
+            // Extract name between ~~
+            let end_tilde_idx = inner[2..].find("~~").ok_or_else(|| {
+                format!("Invalid dead player format (missing closing ~~): {}", entry)
+            })? + 2;
+            let name = &inner[2..end_tilde_idx];
+            let rest = &inner[end_tilde_idx + 2 + 1..]; // Skip the closing ~~ and the :
+            (format!("{}:{}", name, rest), false)
+        } else {
+            (inner.to_string(), true)
+        };
+
+        parse_player_parts(&name_part, false, has_ghost_vote)
+    } else {
+        // Living player
+        parse_player_parts(entry, true, true)
+    }
+}
+
+/// Parse player parts: name:role or name:role(tokens)
+fn parse_player_parts(input: &str, alive: bool, has_ghost_vote: bool) -> Result<PlayerState, String> {
+    // Find the role part (before tokens if any)
+    let (name_role_part, tokens_part) = if let Some(paren_idx) = input.find('(') {
+        if !input.ends_with(')') {
+            return Err(format!("Invalid token format (missing closing paren): {}", input));
+        }
+        (&input[..paren_idx], Some(&input[paren_idx + 1..input.len() - 1]))
+    } else {
+        (input, None)
+    };
+
+    // Split name and role by colon
+    let parts: Vec<&str> = name_role_part.split(':').collect();
+    if parts.len() != 2 {
+        return Err(format!(
+            "Invalid player format (expected name:role): {}",
+            name_role_part
+        ));
+    }
+
+    let name = parts[0].trim().to_string();
+    let role = parts[1].trim().to_string();
+
+    if name.is_empty() {
+        return Err(format!("Player name cannot be empty: {}", input));
+    }
+    if role.is_empty() {
+        return Err(format!("Player role cannot be empty: {}", input));
+    }
+
+    // Parse tokens if present
+    let reminder_tokens = if let Some(tokens_str) = tokens_part {
+        tokens_str
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    Ok(PlayerState {
+        name,
+        role,
+        alive,
+        has_ghost_vote,
+        reminder_tokens,
+    })
 }
 
 #[allow(dead_code)]
