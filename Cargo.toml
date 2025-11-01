@@ -1,0 +1,10 @@
+[package]
+name = "botc-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rustsat = "0.7.4"
+rustsat-minisat = "0.7.4"
+clap = { version = "4.5", features = ["derive"] }
+strsim = "0.11"
