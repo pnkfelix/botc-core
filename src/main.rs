@@ -3069,6 +3069,142 @@ fn format_player_display_text(player: &PlayerState, worst_case: bool) -> String 
     }
 }
 
+// ===== GRIMOIRE RENDERING - POSITIONING =====
+
+/// Calculate the indentation for a player based on their V-position
+/// Returns the indentation amount (0 = sticks out most, higher = more indented)
+fn calculate_v_indentation(segment_index: usize, segment_count: usize) -> usize {
+    if segment_count == 0 {
+        return 0;
+    }
+    if segment_count == 1 {
+        return 0; // Single player, no indentation
+    }
+
+    // For V-shape: middle player (apex) has 0 indentation, others increase
+    // segment_index goes from 0 to segment_count-1
+    // Apex is at index segment_count-1 (last player in the segment)
+    let distance_from_apex = (segment_count - 1).saturating_sub(segment_index);
+    distance_from_apex * 3 // 3 spaces per level of indentation
+}
+
+/// Simple renderer that places players in a grid (simplified version)
+fn render_grimoire_simple(grimoire: &GrimoireState, layout: &TurnBasedLayout) -> String {
+    if grimoire.players.is_empty() {
+        let mut grid = AbstractGrid::new();
+        let title = "Grimoire (0 players)";
+        return render_grid_to_ascii(&grid, title);
+    }
+
+    let positions = assign_players_to_sides(&grimoire.players, layout);
+    let mut grid = AbstractGrid::new();
+
+    // Constants for layout
+    const PLAYER_SPACING: usize = 12; // Horizontal spacing between players
+    const VERTICAL_SPACING: usize = 3; // Rows per player (name, role, blank)
+
+    // Place top players
+    let top_positions: Vec<_> = positions
+        .iter()
+        .filter(|p| matches!(p.side, Side::Top))
+        .collect();
+    for (i, pos) in top_positions.iter().enumerate() {
+        let col = i * PLAYER_SPACING;
+        let row = 0;
+        let name_text = format_player_display_text(pos.player, false);
+        grid.add_cell(name_text, row, col);
+        grid.add_cell(pos.player.role.clone(), row + 1, col);
+    }
+
+    // Place right side players (simple vertical stack for now)
+    let right_positions: Vec<_> = positions
+        .iter()
+        .filter(|p| matches!(p.side, Side::RightUpper | Side::RightLower))
+        .collect();
+    for (i, pos) in right_positions.iter().enumerate() {
+        let row = 4 + i * VERTICAL_SPACING;
+        let col = 40; // Fixed column for right side
+        let name_text = format_player_display_text(pos.player, false);
+        grid.add_cell(name_text, row, col);
+        grid.add_cell(pos.player.role.clone(), row + 1, col);
+    }
+
+    // Place bottom players
+    let bottom_positions: Vec<_> = positions
+        .iter()
+        .filter(|p| matches!(p.side, Side::Bottom))
+        .collect();
+    let bottom_row = 20;
+    for (i, pos) in bottom_positions.iter().enumerate() {
+        let col = i * PLAYER_SPACING;
+        let name_text = format_player_display_text(pos.player, false);
+        grid.add_cell(name_text, bottom_row, col);
+        grid.add_cell(pos.player.role.clone(), bottom_row + 1, col);
+    }
+
+    // Place left side players (simple vertical stack for now)
+    let left_positions: Vec<_> = positions
+        .iter()
+        .filter(|p| matches!(p.side, Side::LeftLower | Side::LeftUpper))
+        .collect();
+    for (i, pos) in left_positions.iter().enumerate() {
+        let row = 4 + i * VERTICAL_SPACING;
+        let col = 0;
+        let name_text = format_player_display_text(pos.player, false);
+        grid.add_cell(name_text, row, col);
+        grid.add_cell(pos.player.role.clone(), row + 1, col);
+    }
+
+    let title = format!("Grimoire ({} players)", grimoire.players.len());
+    render_grid_to_ascii(&grid, &title)
+}
+
+/// Render abstract grid to ASCII string with box drawing characters
+fn render_grid_to_ascii(grid: &AbstractGrid, title: &str) -> String {
+    let (width, height) = grid.dimensions();
+
+    if width == 0 || height == 0 {
+        return format!("┌─ {} ┐\n└────┘", title);
+    }
+
+    // Create a 2D array for the content
+    let mut lines: Vec<Vec<char>> = vec![vec![' '; width]; height];
+
+    // Fill in the cells
+    for cell in &grid.cells {
+        let row = cell.row - grid.min_row;
+        let col_start = cell.col - grid.min_col;
+
+        for (i, ch) in cell.content.chars().enumerate() {
+            if col_start + i < width {
+                lines[row][col_start + i] = ch;
+            }
+        }
+    }
+
+    // Build the output with borders
+    let mut result = String::new();
+
+    // Top border with title
+    let title_section = format!("─ {} ", title);
+    let border_width = width + 2; // +2 for the border characters
+    let remaining = border_width.saturating_sub(title_section.len() + 1);
+    result.push_str(&format!("┌{}{}┐\n", title_section, "─".repeat(remaining)));
+
+    // Content lines
+    for line in lines {
+        result.push('│');
+        result.extend(line);
+        result.push('│');
+        result.push('\n');
+    }
+
+    // Bottom border
+    result.push_str(&format!("└{}┘", "─".repeat(border_width - 2)));
+
+    result
+}
+
 #[allow(dead_code)]
 fn format_bag(roles: &[Role]) -> String {
     if roles.is_empty() {
@@ -3103,6 +3239,16 @@ enum Command {
         #[arg(short, long)]
         script: Option<String>,
     },
+
+    /// Render grimoire as ASCII art
+    RenderGrimoire {
+        /// Grimoire in format: [Alice:baron Bob:imp Charlie:butler]
+        grimoire: String,
+
+        /// Turn configuration: top,ru,rl,bottom,ll,lu (e.g., "2,1,1,1,0,0")
+        #[arg(short, long)]
+        layout: Option<String>,
+    },
 }
 
 // Macro for development tests - only shows message if tests are present
@@ -3124,6 +3270,9 @@ fn main() {
         Some(Command::ValidateRoleDistribution { bag, script }) => {
             validate_role_distribution_cmd(&bag, script.as_deref());
         }
+        Some(Command::RenderGrimoire { grimoire, layout }) => {
+            render_grimoire_cmd(&grimoire, layout.as_deref());
+        }
         None => {
             // No command given - run development tests
             println!("=== BotC Bag Legality Validator ===\n");
@@ -3131,6 +3280,7 @@ fn main() {
             println!("Run CLI with: cargo run -- <command>\n");
             println!("Available commands:");
             println!("  validate-role-distribution <bag>");
+            println!("  render-grimoire <grimoire>");
 
             dev_tests! {
                 // Uncomment to add development tests:
@@ -3140,6 +3290,88 @@ fn main() {
             }
         }
     }
+}
+
+fn render_grimoire_cmd(grimoire_str: &str, layout_str: Option<&str>) {
+    // Parse grimoire
+    let grimoire = match parse_grimoire(grimoire_str) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("Error parsing grimoire: {}", e);
+            return;
+        }
+    };
+
+    if grimoire.players.is_empty() {
+        println!("Empty grimoire");
+        return;
+    }
+
+    // Parse or generate layout
+    let layout = if let Some(layout_str) = layout_str {
+        match parse_layout_str(layout_str) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("Error parsing layout: {}", e);
+                return;
+            }
+        }
+    } else {
+        // Use a default layout: all players on top
+        TurnBasedLayout {
+            top_count: grimoire.players.len(),
+            right_upper_count: 0,
+            right_lower_count: 0,
+            bottom_count: 0,
+            left_lower_count: 0,
+            left_upper_count: 0,
+        }
+    };
+
+    // Verify layout matches player count
+    let layout_total = layout.top_count
+        + layout.right_upper_count
+        + layout.right_lower_count
+        + layout.bottom_count
+        + layout.left_lower_count
+        + layout.left_upper_count;
+
+    if layout_total != grimoire.players.len() {
+        eprintln!(
+            "Error: Layout specifies {} players but grimoire has {}",
+            layout_total,
+            grimoire.players.len()
+        );
+        return;
+    }
+
+    // Render and print
+    let rendered = render_grimoire_simple(&grimoire, &layout);
+    println!("{}", rendered);
+}
+
+fn parse_layout_str(s: &str) -> Result<TurnBasedLayout, String> {
+    let parts: Vec<&str> = s.split(',').map(|p| p.trim()).collect();
+    if parts.len() != 6 {
+        return Err(format!(
+            "Layout must have 6 values (top,ru,rl,bottom,ll,lu), got {}",
+            parts.len()
+        ));
+    }
+
+    let parse_usize = |s: &str, name: &str| -> Result<usize, String> {
+        s.parse::<usize>()
+            .map_err(|_| format!("Invalid number for {}: '{}'", name, s))
+    };
+
+    Ok(TurnBasedLayout {
+        top_count: parse_usize(parts[0], "top")?,
+        right_upper_count: parse_usize(parts[1], "right_upper")?,
+        right_lower_count: parse_usize(parts[2], "right_lower")?,
+        bottom_count: parse_usize(parts[3], "bottom")?,
+        left_lower_count: parse_usize(parts[4], "left_lower")?,
+        left_upper_count: parse_usize(parts[5], "left_upper")?,
+    })
 }
 
 struct DistributionAnalysis {
