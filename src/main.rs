@@ -2381,16 +2381,18 @@ mod tests {
     fn test_generate_turn_configurations() {
         let configs = generate_all_turn_configurations(3);
 
-        // Should generate all valid distributions
-        // For 3 players, possible configs: (3,0,0,0), (2,1,0,0), (2,0,1,0), etc.
+        // Should generate all valid distributions across 6 segments
         assert!(!configs.is_empty());
 
         // Check that all configs sum to player count
         for config in &configs {
-            assert_eq!(
-                config.top_count + config.right_count + config.bottom_count + config.left_count,
-                3
-            );
+            let total = config.top_count
+                + config.right_upper_count
+                + config.right_lower_count
+                + config.bottom_count
+                + config.left_lower_count
+                + config.left_upper_count;
+            assert_eq!(total, 3);
             // Top count must be at least 1
             assert!(config.top_count >= 1);
         }
@@ -2424,9 +2426,11 @@ mod tests {
 
         let layout = TurnBasedLayout {
             top_count: 2,
-            right_count: 0,
+            right_upper_count: 0,
+            right_lower_count: 0,
             bottom_count: 1,
-            left_count: 0,
+            left_lower_count: 0,
+            left_upper_count: 0,
         };
 
         let positions = assign_players_to_sides(&players, &layout);
@@ -2838,22 +2842,36 @@ fn parse_player_parts(input: &str, alive: bool, has_ghost_vote: bool) -> Result<
 
 // ===== GRIMOIRE RENDERING - LAYOUT SYSTEM =====
 
-/// Turn-based layout: distribution of players across 4 sides
+/// Turn-based layout: distribution of players across 6 segments (V-shaped vertical sides)
+///
+/// The layout follows clockwise order:
+/// - Top: horizontal, left to right
+/// - RightUpper: upper arm of right V (receding from right edge toward center)
+/// - RightLower: lower arm of right V (receding from right edge toward center)
+/// - Bottom: horizontal, right to left
+/// - LeftLower: lower arm of left V (receding from left edge toward center)
+/// - LeftUpper: upper arm of left V (receding from left edge toward center)
+///
+/// The "apex" of each V is the transition between upper/lower segments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TurnBasedLayout {
     top_count: usize,
-    right_count: usize,
+    right_upper_count: usize,
+    right_lower_count: usize,
     bottom_count: usize,
-    left_count: usize,
+    left_lower_count: usize,
+    left_upper_count: usize,
 }
 
-/// Player position on a specific side
+/// Player position segment
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Side {
     Top,
-    Right,
+    RightUpper,
+    RightLower,
     Bottom,
-    Left,
+    LeftLower,
+    LeftUpper,
 }
 
 /// A player assigned to a side with their position
@@ -2865,23 +2883,37 @@ struct PlayerPosition<'a> {
 }
 
 /// Generate all possible turn configurations for a given player count
-/// Returns all valid ways to distribute players across 4 sides
+/// Returns all valid ways to distribute players across 6 segments
 fn generate_all_turn_configurations(player_count: usize) -> Vec<TurnBasedLayout> {
     let mut configurations = Vec::new();
 
-    // Try all possible ways to distribute players among 4 sides
-    // topCount + rightCount + bottomCount + leftCount = playerCount
-    // Constraint: topCount >= 1 (at least one player on top for visual stability)
+    // Try all possible ways to distribute players among 6 segments
+    // Constraint: top_count >= 1 (at least one player on top for visual stability)
     for top_count in 1..=player_count {
-        for right_count in 0..=(player_count - top_count) {
-            for bottom_count in 0..=(player_count - top_count - right_count) {
-                let left_count = player_count - top_count - right_count - bottom_count;
-                configurations.push(TurnBasedLayout {
-                    top_count,
-                    right_count,
-                    bottom_count,
-                    left_count,
-                });
+        let remaining_after_top = player_count - top_count;
+
+        for right_upper_count in 0..=remaining_after_top {
+            let remaining_after_ru = remaining_after_top - right_upper_count;
+
+            for right_lower_count in 0..=remaining_after_ru {
+                let remaining_after_rl = remaining_after_ru - right_lower_count;
+
+                for bottom_count in 0..=remaining_after_rl {
+                    let remaining_after_bottom = remaining_after_rl - bottom_count;
+
+                    for left_lower_count in 0..=remaining_after_bottom {
+                        let left_upper_count = remaining_after_bottom - left_lower_count;
+
+                        configurations.push(TurnBasedLayout {
+                            top_count,
+                            right_upper_count,
+                            right_lower_count,
+                            bottom_count,
+                            left_lower_count,
+                            left_upper_count,
+                        });
+                    }
+                }
             }
         }
     }
@@ -2889,9 +2921,8 @@ fn generate_all_turn_configurations(player_count: usize) -> Vec<TurnBasedLayout>
     configurations
 }
 
-/// Assign players to sides based on turn configuration
-/// Players are assigned clockwise: top (left-to-right), right (top-to-bottom),
-/// bottom (right-to-left), left (bottom-to-top)
+/// Assign players to segments based on turn configuration
+/// Players are assigned in clockwise order through 6 segments
 fn assign_players_to_sides<'a>(
     players: &'a [PlayerState],
     layout: &TurnBasedLayout,
@@ -2909,21 +2940,29 @@ fn assign_players_to_sides<'a>(
         player_index += 1;
     }
 
-    // Right side (top to bottom)
-    for i in 0..layout.right_count {
+    // Right upper (upper arm of V, going down toward apex)
+    for i in 0..layout.right_upper_count {
         positions.push(PlayerPosition {
             player: &players[player_index],
-            side: Side::Right,
+            side: Side::RightUpper,
             side_index: i,
         });
         player_index += 1;
     }
 
-    // Bottom side (right to left) - reverse the order for clockwise flow
-    let bottom_start = player_index;
-    for i in 0..layout.bottom_count {
+    // Right lower (lower arm of V, going down from apex)
+    for i in 0..layout.right_lower_count {
+        positions.push(PlayerPosition {
+            player: &players[player_index],
+            side: Side::RightLower,
+            side_index: i,
+        });
         player_index += 1;
     }
+
+    // Bottom side (right to left) - reverse for clockwise flow
+    let bottom_start = player_index;
+    player_index += layout.bottom_count;
     for i in 0..layout.bottom_count {
         positions.push(PlayerPosition {
             player: &players[bottom_start + layout.bottom_count - 1 - i],
@@ -2932,15 +2971,24 @@ fn assign_players_to_sides<'a>(
         });
     }
 
-    // Left side (bottom to top) - reverse the order for clockwise flow
-    let left_start = player_index;
-    for i in 0..layout.left_count {
-        player_index += 1;
-    }
-    for i in 0..layout.left_count {
+    // Left lower (lower arm of V, going up toward apex)
+    let left_lower_start = player_index;
+    player_index += layout.left_lower_count;
+    for i in 0..layout.left_lower_count {
         positions.push(PlayerPosition {
-            player: &players[left_start + layout.left_count - 1 - i],
-            side: Side::Left,
+            player: &players[left_lower_start + layout.left_lower_count - 1 - i],
+            side: Side::LeftLower,
+            side_index: i,
+        });
+    }
+
+    // Left upper (upper arm of V, going up from apex)
+    let left_upper_start = player_index;
+    player_index += layout.left_upper_count;
+    for i in 0..layout.left_upper_count {
+        positions.push(PlayerPosition {
+            player: &players[left_upper_start + layout.left_upper_count - 1 - i],
+            side: Side::LeftUpper,
             side_index: i,
         });
     }
