@@ -2374,6 +2374,113 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("square brackets"));
     }
+
+    // ===== GRIMOIRE LAYOUT TESTS =====
+
+    #[test]
+    fn test_generate_turn_configurations() {
+        let configs = generate_all_turn_configurations(3);
+
+        // Should generate all valid distributions
+        // For 3 players, possible configs: (3,0,0,0), (2,1,0,0), (2,0,1,0), etc.
+        assert!(!configs.is_empty());
+
+        // Check that all configs sum to player count
+        for config in &configs {
+            assert_eq!(
+                config.top_count + config.right_count + config.bottom_count + config.left_count,
+                3
+            );
+            // Top count must be at least 1
+            assert!(config.top_count >= 1);
+        }
+    }
+
+    #[test]
+    fn test_assign_players_to_sides() {
+        let players = vec![
+            PlayerState {
+                name: "Alice".to_string(),
+                role: "baron".to_string(),
+                alive: true,
+                has_ghost_vote: true,
+                reminder_tokens: vec![],
+            },
+            PlayerState {
+                name: "Bob".to_string(),
+                role: "imp".to_string(),
+                alive: true,
+                has_ghost_vote: true,
+                reminder_tokens: vec![],
+            },
+            PlayerState {
+                name: "Charlie".to_string(),
+                role: "butler".to_string(),
+                alive: true,
+                has_ghost_vote: true,
+                reminder_tokens: vec![],
+            },
+        ];
+
+        let layout = TurnBasedLayout {
+            top_count: 2,
+            right_count: 0,
+            bottom_count: 1,
+            left_count: 0,
+        };
+
+        let positions = assign_players_to_sides(&players, &layout);
+
+        assert_eq!(positions.len(), 3);
+
+        // First two players on top
+        assert!(matches!(positions[0].side, Side::Top));
+        assert_eq!(positions[0].side_index, 0);
+        assert_eq!(positions[0].player.name, "Alice");
+
+        assert!(matches!(positions[1].side, Side::Top));
+        assert_eq!(positions[1].side_index, 1);
+        assert_eq!(positions[1].player.name, "Bob");
+
+        // Third player on bottom
+        assert!(matches!(positions[2].side, Side::Bottom));
+        assert_eq!(positions[2].side_index, 0);
+        assert_eq!(positions[2].player.name, "Charlie");
+    }
+
+    #[test]
+    fn test_format_player_display_text() {
+        let alive_player = PlayerState {
+            name: "Alice".to_string(),
+            role: "baron".to_string(),
+            alive: true,
+            has_ghost_vote: true,
+            reminder_tokens: vec![],
+        };
+
+        let dead_with_vote = PlayerState {
+            name: "Bob".to_string(),
+            role: "imp".to_string(),
+            alive: false,
+            has_ghost_vote: true,
+            reminder_tokens: vec![],
+        };
+
+        let dead_without_vote = PlayerState {
+            name: "Charlie".to_string(),
+            role: "butler".to_string(),
+            alive: false,
+            has_ghost_vote: false,
+            reminder_tokens: vec![],
+        };
+
+        assert_eq!(format_player_display_text(&alive_player, false), "Alice");
+        assert_eq!(format_player_display_text(&dead_with_vote, false), "*Bob*");
+        assert_eq!(format_player_display_text(&dead_without_vote, false), "*~~Charlie~~*");
+
+        // Worst case formatting
+        assert_eq!(format_player_display_text(&alive_player, true), "*~~Alice~~*");
+    }
 }
 
 // RoleSpec: Either a known role or a placeholder to be solved for
@@ -2727,6 +2834,191 @@ fn parse_player_parts(input: &str, alive: bool, has_ghost_vote: bool) -> Result<
         has_ghost_vote,
         reminder_tokens,
     })
+}
+
+// ===== GRIMOIRE RENDERING - LAYOUT SYSTEM =====
+
+/// Turn-based layout: distribution of players across 4 sides
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TurnBasedLayout {
+    top_count: usize,
+    right_count: usize,
+    bottom_count: usize,
+    left_count: usize,
+}
+
+/// Player position on a specific side
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+/// A player assigned to a side with their position
+#[derive(Debug, Clone)]
+struct PlayerPosition<'a> {
+    player: &'a PlayerState,
+    side: Side,
+    side_index: usize, // Position within that side (0-based)
+}
+
+/// Generate all possible turn configurations for a given player count
+/// Returns all valid ways to distribute players across 4 sides
+fn generate_all_turn_configurations(player_count: usize) -> Vec<TurnBasedLayout> {
+    let mut configurations = Vec::new();
+
+    // Try all possible ways to distribute players among 4 sides
+    // topCount + rightCount + bottomCount + leftCount = playerCount
+    // Constraint: topCount >= 1 (at least one player on top for visual stability)
+    for top_count in 1..=player_count {
+        for right_count in 0..=(player_count - top_count) {
+            for bottom_count in 0..=(player_count - top_count - right_count) {
+                let left_count = player_count - top_count - right_count - bottom_count;
+                configurations.push(TurnBasedLayout {
+                    top_count,
+                    right_count,
+                    bottom_count,
+                    left_count,
+                });
+            }
+        }
+    }
+
+    configurations
+}
+
+/// Assign players to sides based on turn configuration
+/// Players are assigned clockwise: top (left-to-right), right (top-to-bottom),
+/// bottom (right-to-left), left (bottom-to-top)
+fn assign_players_to_sides<'a>(
+    players: &'a [PlayerState],
+    layout: &TurnBasedLayout,
+) -> Vec<PlayerPosition<'a>> {
+    let mut positions = Vec::new();
+    let mut player_index = 0;
+
+    // Top side (left to right)
+    for i in 0..layout.top_count {
+        positions.push(PlayerPosition {
+            player: &players[player_index],
+            side: Side::Top,
+            side_index: i,
+        });
+        player_index += 1;
+    }
+
+    // Right side (top to bottom)
+    for i in 0..layout.right_count {
+        positions.push(PlayerPosition {
+            player: &players[player_index],
+            side: Side::Right,
+            side_index: i,
+        });
+        player_index += 1;
+    }
+
+    // Bottom side (right to left) - reverse the order for clockwise flow
+    let bottom_start = player_index;
+    for i in 0..layout.bottom_count {
+        player_index += 1;
+    }
+    for i in 0..layout.bottom_count {
+        positions.push(PlayerPosition {
+            player: &players[bottom_start + layout.bottom_count - 1 - i],
+            side: Side::Bottom,
+            side_index: i,
+        });
+    }
+
+    // Left side (bottom to top) - reverse the order for clockwise flow
+    let left_start = player_index;
+    for i in 0..layout.left_count {
+        player_index += 1;
+    }
+    for i in 0..layout.left_count {
+        positions.push(PlayerPosition {
+            player: &players[left_start + layout.left_count - 1 - i],
+            side: Side::Left,
+            side_index: i,
+        });
+    }
+
+    positions
+}
+
+// ===== GRIMOIRE RENDERING - GRID SYSTEM =====
+
+/// A cell in the abstract grid
+#[derive(Debug, Clone)]
+struct GridCell {
+    content: String,
+    row: usize,
+    col: usize,
+}
+
+/// Abstract grid representation
+#[derive(Debug, Clone)]
+struct AbstractGrid {
+    cells: Vec<GridCell>,
+    min_row: usize,
+    max_row: usize,
+    min_col: usize,
+    max_col: usize,
+}
+
+impl AbstractGrid {
+    fn new() -> Self {
+        AbstractGrid {
+            cells: Vec::new(),
+            min_row: 0,
+            max_row: 0,
+            min_col: 0,
+            max_col: 0,
+        }
+    }
+
+    fn add_cell(&mut self, content: String, row: usize, col: usize) {
+        if self.cells.is_empty() {
+            self.min_row = row;
+            self.max_row = row;
+            self.min_col = col;
+            self.max_col = col + content.len();
+        } else {
+            self.min_row = self.min_row.min(row);
+            self.max_row = self.max_row.max(row);
+            self.min_col = self.min_col.min(col);
+            self.max_col = self.max_col.max(col + content.len());
+        }
+
+        self.cells.push(GridCell { content, row, col });
+    }
+
+    /// Get dimensions (width, height)
+    fn dimensions(&self) -> (usize, usize) {
+        if self.cells.is_empty() {
+            (0, 0)
+        } else {
+            let width = self.max_col - self.min_col;
+            let height = self.max_row - self.min_row + 1;
+            (width, height)
+        }
+    }
+}
+
+/// Format player display text (handles alive/dead formatting)
+fn format_player_display_text(player: &PlayerState, worst_case: bool) -> String {
+    if worst_case {
+        // Worst case formatting for layout stability: *~~name~~*
+        format!("*~~{}~~*", player.name)
+    } else if player.alive {
+        player.name.clone()
+    } else if player.has_ghost_vote {
+        format!("*{}*", player.name)
+    } else {
+        format!("*~~{}~~*", player.name)
+    }
 }
 
 #[allow(dead_code)]
