@@ -1784,6 +1784,27 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_bag_with_commas() {
+        // Test Clojure-style comma as whitespace
+        let bag_str = "{soldier, mayor imp, poisoner}";
+        let roles = parse_bag(bag_str).unwrap();
+
+        assert_eq!(roles.len(), 4);
+        assert!(roles.contains(&Role::Soldier));
+        assert!(roles.contains(&Role::Mayor));
+        assert!(roles.contains(&Role::Imp));
+        assert!(roles.contains(&Role::Poisoner));
+
+        // Test that purely comma-separated also works
+        let bag_str2 = "{chef,empath,imp}";
+        let roles2 = parse_bag(bag_str2).unwrap();
+        assert_eq!(roles2.len(), 3);
+        assert!(roles2.contains(&Role::Chef));
+        assert!(roles2.contains(&Role::Empath));
+        assert!(roles2.contains(&Role::Imp));
+    }
+
+    #[test]
     fn test_placeholder_no_duplicates() {
         // Test that placeholders get assigned distinct roles
         let player_count = 3;
@@ -2277,8 +2298,10 @@ fn parse_bag_spec_filtered(input: &str, script: Option<&Script>) -> Result<Vec<R
         return Ok(Vec::new());
     }
 
-    // Split by whitespace
-    let tokens: Vec<&str> = content.split_whitespace().collect();
+    // Split by whitespace and commas (Clojure-style)
+    let tokens: Vec<&str> = content.split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+        .collect();
 
     let mut specs = Vec::new();
     let mut role_counts: std::collections::HashMap<Role, usize> = std::collections::HashMap::new();
@@ -2369,8 +2392,10 @@ fn parse_bag(input: &str) -> Result<Vec<Role>, String> {
         return Ok(Vec::new());
     }
 
-    // Split by whitespace
-    let role_names: Vec<&str> = content.split_whitespace().collect();
+    // Split by whitespace and commas (Clojure-style)
+    let role_names: Vec<&str> = content.split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+        .collect();
     let mut roles = Vec::new();
 
     for role_name in role_names {
