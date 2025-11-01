@@ -3121,20 +3121,33 @@ fn render_grimoire_simple(grimoire: &GrimoireState, layout: &TurnBasedLayout) ->
         .iter()
         .filter(|p| matches!(p.side, Side::RightUpper | Side::RightLower))
         .collect();
+    let right_start_row = 3;
     for (i, pos) in right_positions.iter().enumerate() {
-        let row = 4 + i * VERTICAL_SPACING;
+        let row = right_start_row + i * VERTICAL_SPACING;
         let col = 40; // Fixed column for right side
         let name_text = format_player_display_text(pos.player, false);
         grid.add_cell(name_text, row, col);
         grid.add_cell(pos.player.role.clone(), row + 1, col);
     }
 
+    // Calculate bottom row based on vertical sides
+    let max_vertical_players = right_positions.len().max(
+        positions
+            .iter()
+            .filter(|p| matches!(p.side, Side::LeftLower | Side::LeftUpper))
+            .count(),
+    );
+    let bottom_row = if max_vertical_players > 0 {
+        right_start_row + max_vertical_players * VERTICAL_SPACING + 1
+    } else {
+        4 // Default if no vertical players
+    };
+
     // Place bottom players
     let bottom_positions: Vec<_> = positions
         .iter()
         .filter(|p| matches!(p.side, Side::Bottom))
         .collect();
-    let bottom_row = 20;
     for (i, pos) in bottom_positions.iter().enumerate() {
         let col = i * PLAYER_SPACING;
         let name_text = format_player_display_text(pos.player, false);
@@ -3148,7 +3161,7 @@ fn render_grimoire_simple(grimoire: &GrimoireState, layout: &TurnBasedLayout) ->
         .filter(|p| matches!(p.side, Side::LeftLower | Side::LeftUpper))
         .collect();
     for (i, pos) in left_positions.iter().enumerate() {
-        let row = 4 + i * VERTICAL_SPACING;
+        let row = right_start_row + i * VERTICAL_SPACING;
         let col = 0;
         let name_text = format_player_display_text(pos.player, false);
         grid.add_cell(name_text, row, col);
