@@ -3102,36 +3102,121 @@ fn render_grimoire_simple(grimoire: &GrimoireState, layout: &TurnBasedLayout) ->
     // Constants for layout
     const PLAYER_SPACING: usize = 12; // Horizontal spacing between players
     const VERTICAL_SPACING: usize = 3; // Rows per player (name, role, blank)
+    const SIDE_MARGIN: usize = 2; // Extra spacing between vertical sides and horizontal rows
 
-    // Place top players
+    // Collect position groups
     let top_positions: Vec<_> = positions
         .iter()
         .filter(|p| matches!(p.side, Side::Top))
         .collect();
+    let bottom_positions: Vec<_> = positions
+        .iter()
+        .filter(|p| matches!(p.side, Side::Bottom))
+        .collect();
+    let left_lower_positions: Vec<_> = positions
+        .iter()
+        .filter(|p| matches!(p.side, Side::LeftLower))
+        .collect();
+    let left_upper_positions: Vec<_> = positions
+        .iter()
+        .filter(|p| matches!(p.side, Side::LeftUpper))
+        .collect();
+    let right_upper_positions: Vec<_> = positions
+        .iter()
+        .filter(|p| matches!(p.side, Side::RightUpper))
+        .collect();
+    let right_lower_positions: Vec<_> = positions
+        .iter()
+        .filter(|p| matches!(p.side, Side::RightLower))
+        .collect();
+
+    // Calculate maximum indentation for left side
+    let max_left_indent = left_lower_positions
+        .iter()
+        .enumerate()
+        .map(|(i, _)| calculate_v_indentation(i, left_lower_positions.len()))
+        .chain(
+            left_upper_positions
+                .iter()
+                .enumerate()
+                .map(|(i, _)| calculate_v_indentation(left_upper_positions.len() - 1 - i, left_upper_positions.len()))
+        )
+        .max()
+        .unwrap_or(0);
+
+    // Calculate maximum text width for left side players
+    let max_left_text_width = left_lower_positions
+        .iter()
+        .chain(left_upper_positions.iter())
+        .map(|pos| {
+            let name_len = format_player_display_text(pos.player, false).len();
+            let role_len = pos.player.role.len();
+            name_len.max(role_len)
+        })
+        .max()
+        .unwrap_or(0);
+
+    // Top and bottom start after left side
+    let horizontal_start_col = max_left_indent + max_left_text_width + SIDE_MARGIN;
+
+    // Place top players
     for (i, pos) in top_positions.iter().enumerate() {
-        let col = i * PLAYER_SPACING;
+        let col = horizontal_start_col + i * PLAYER_SPACING;
         let row = 0;
         let name_text = format_player_display_text(pos.player, false);
         grid.add_cell(name_text, row, col);
         grid.add_cell(pos.player.role.clone(), row + 1, col);
     }
 
-    // Place right side players (simple vertical stack for now)
-    let right_positions: Vec<_> = positions
+    // Calculate rightmost extent of top/bottom rows
+    let max_horizontal_text_width = top_positions
         .iter()
-        .filter(|p| matches!(p.side, Side::RightUpper | Side::RightLower))
-        .collect();
+        .chain(bottom_positions.iter())
+        .map(|pos| {
+            let name_len = format_player_display_text(pos.player, false).len();
+            let role_len = pos.player.role.len();
+            name_len.max(role_len)
+        })
+        .max()
+        .unwrap_or(0);
+
+    let max_horizontal_players = top_positions.len().max(bottom_positions.len());
+    let horizontal_end_col = if max_horizontal_players > 0 {
+        horizontal_start_col + (max_horizontal_players - 1) * PLAYER_SPACING + max_horizontal_text_width
+    } else {
+        horizontal_start_col
+    };
+
+    // Right side starts after horizontal rows
+    let base_right_col = horizontal_end_col + SIDE_MARGIN;
+
+    // Place right side players with V-shaped indentation
     let right_start_row = 3;
-    for (i, pos) in right_positions.iter().enumerate() {
+
+    // Right upper: receding from edge toward center (indentation increases away from apex)
+    for (i, pos) in right_upper_positions.iter().enumerate() {
         let row = right_start_row + i * VERTICAL_SPACING;
-        let col = 40; // Fixed column for right side
+        let indent = calculate_v_indentation(i, right_upper_positions.len());
+        let col = base_right_col + indent;
+        let name_text = format_player_display_text(pos.player, false);
+        grid.add_cell(name_text, row, col);
+        grid.add_cell(pos.player.role.clone(), row + 1, col);
+    }
+
+    // Right lower: extending from center back toward edge (indentation decreases away from apex)
+    let right_lower_start_row = right_start_row + right_upper_positions.len() * VERTICAL_SPACING;
+    for (i, pos) in right_lower_positions.iter().enumerate() {
+        let row = right_lower_start_row + i * VERTICAL_SPACING;
+        // For lower segment, apex is at beginning (i=0), so we reverse the indentation
+        let indent = calculate_v_indentation(right_lower_positions.len() - 1 - i, right_lower_positions.len());
+        let col = base_right_col + indent;
         let name_text = format_player_display_text(pos.player, false);
         grid.add_cell(name_text, row, col);
         grid.add_cell(pos.player.role.clone(), row + 1, col);
     }
 
     // Calculate bottom row based on vertical sides
-    let max_vertical_players = right_positions.len().max(
+    let max_vertical_players = (right_upper_positions.len() + right_lower_positions.len()).max(
         positions
             .iter()
             .filter(|p| matches!(p.side, Side::LeftLower | Side::LeftUpper))
@@ -3144,25 +3229,33 @@ fn render_grimoire_simple(grimoire: &GrimoireState, layout: &TurnBasedLayout) ->
     };
 
     // Place bottom players
-    let bottom_positions: Vec<_> = positions
-        .iter()
-        .filter(|p| matches!(p.side, Side::Bottom))
-        .collect();
     for (i, pos) in bottom_positions.iter().enumerate() {
-        let col = i * PLAYER_SPACING;
+        let col = horizontal_start_col + i * PLAYER_SPACING;
         let name_text = format_player_display_text(pos.player, false);
         grid.add_cell(name_text, bottom_row, col);
         grid.add_cell(pos.player.role.clone(), bottom_row + 1, col);
     }
 
-    // Place left side players (simple vertical stack for now)
-    let left_positions: Vec<_> = positions
-        .iter()
-        .filter(|p| matches!(p.side, Side::LeftLower | Side::LeftUpper))
-        .collect();
-    for (i, pos) in left_positions.iter().enumerate() {
+    // Place left side players with V-shaped indentation
+    let base_left_col = 0;
+
+    // Left lower: same slope direction as right lower
+    for (i, pos) in left_lower_positions.iter().enumerate() {
         let row = right_start_row + i * VERTICAL_SPACING;
-        let col = 0;
+        let indent = calculate_v_indentation(i, left_lower_positions.len());
+        let col = base_left_col + indent;
+        let name_text = format_player_display_text(pos.player, false);
+        grid.add_cell(name_text, row, col);
+        grid.add_cell(pos.player.role.clone(), row + 1, col);
+    }
+
+    // Left upper: extending from edge toward center (same slope as left lower - positive)
+    let left_upper_start_row = right_start_row + left_lower_positions.len() * VERTICAL_SPACING;
+    for (i, pos) in left_upper_positions.iter().enumerate() {
+        let row = left_upper_start_row + i * VERTICAL_SPACING;
+        // Reverse indentation so it starts at edge and moves toward center (positive slope)
+        let indent = calculate_v_indentation(left_upper_positions.len() - 1 - i, left_upper_positions.len());
+        let col = base_left_col + indent;
         let name_text = format_player_display_text(pos.player, false);
         grid.add_cell(name_text, row, col);
         grid.add_cell(pos.player.role.clone(), row + 1, col);
