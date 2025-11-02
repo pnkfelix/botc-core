@@ -3294,7 +3294,7 @@ fn render_grid_to_ascii(grid: &AbstractGrid, title: &str) -> String {
     // Top border with title
     let title_section = format!("─ {} ", title);
     let border_width = width + 2; // +2 for the border characters
-    let remaining = border_width.saturating_sub(title_section.len() + 1);
+    let remaining = border_width.saturating_sub(title_section.len());
     result.push_str(&format!("┌{}{}┐\n", title_section, "─".repeat(remaining)));
 
     // Content lines
