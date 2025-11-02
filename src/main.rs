@@ -3423,14 +3423,31 @@ fn render_grimoire_cmd(grimoire_str: &str, layout_str: Option<&str>) {
             }
         }
     } else {
-        // Use a default layout: all players on top
+        // Use a default layout: distribute evenly across 6 segments
+        // Divide by 6 (rounding up), use that for first 5 segments, remainder goes to 6th
+        let player_count = grimoire.players.len();
+        let base_per_segment = (player_count + 5) / 6; // Ceiling division
+        let first_five_total = base_per_segment * 5;
+        let remainder = if first_five_total <= player_count {
+            player_count - first_five_total
+        } else {
+            // If ceiling division causes overflow, fall back to floor division
+            let base_per_segment = player_count / 6;
+            player_count - (base_per_segment * 5)
+        };
+        let segment_count = if first_five_total <= player_count {
+            base_per_segment
+        } else {
+            player_count / 6
+        };
+
         TurnBasedLayout {
-            top_count: grimoire.players.len(),
-            right_upper_count: 0,
-            right_lower_count: 0,
-            bottom_count: 0,
-            left_lower_count: 0,
-            left_upper_count: 0,
+            top_count: segment_count,
+            right_upper_count: segment_count,
+            right_lower_count: segment_count,
+            bottom_count: segment_count,
+            left_lower_count: segment_count,
+            left_upper_count: remainder,
         }
     };
 
